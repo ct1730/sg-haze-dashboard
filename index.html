@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SG Haze Dashboard — Live Singapore Air Quality</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --card: #111827;
+    --border: #1f2937;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --accent: #f59e0b;
+    --good: #22c55e;
+    --moderate: #eab308;
+    --unhealthy: #ef4444;
+    --very-unhealthy: #a855f7;
+    --hazardous: #dc2626;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  /* Header */
+  .header {
+    text-align: center;
+    padding: 30px 0 20px;
+    position: relative;
+  }
+  .header h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #f59e0b, #ef4444);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 6px;
+  }
+  .header .subtitle { color: var(--muted); font-size: 0.95rem; }
+  .header .timestamp {
+    color: var(--muted); font-size: 0.85rem; margin-top: 8px;
+  }
+  .header .timestamp span { color: var(--accent); }
+
+  /* Loading state */
+  .loading {
+    text-align: center; padding: 80px 20px;
+    color: var(--muted); font-size: 1.1rem;
+  }
+  .loading .spinner {
+    display: inline-block; width: 40px; height: 40px;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    margin-bottom: 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Error state */
+  .error-banner {
+    background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 12px; padding: 16px 20px; margin: 20px 0;
+    color: #fca5a5; text-align: center;
+  }
+
+  /* PSI Gauge Card */
+  .gauge-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 768px) { .gauge-section { grid-template-columns: 1fr; } }
+
+  .gauge-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px;
+    display: flex; align-items: center; gap: 24px;
+    transition: border-color 0.3s;
+  }
+  .gauge-card:hover { border-color: var(--accent); }
+
+  .gauge-ring {
+    position: relative; width: 140px; height: 140px; flex-shrink: 0;
+  }
+  .gauge-ring svg { transform: rotate(-90deg); }
+  .gauge-ring .bg { stroke: var(--border); }
+  .gauge-ring .fg { stroke-linecap: round; transition: stroke-dashoffset 1s ease, stroke 0.5s; }
+  .gauge-ring .value {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  .gauge-ring .value .num { font-size: 2rem; font-weight: 700; }
+  .gauge-ring .value .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .gauge-info h3 { font-size: 1rem; color: var(--muted); margin-bottom: 4px; }
+  .gauge-info .status { font-size: 1.4rem; font-weight: 600; margin-bottom: 8px; }
+  .gauge-info .range { font-size: 0.8rem; color: var(--muted); }
+  .gauge-info .dominant { font-size: 0.8rem; margin-top: 8px; color: var(--accent); }
+
+  /* Region cards */
+  .section-title {
+    font-size: 1.1rem; font-weight: 600; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .region-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .region-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    text-align: center;
+    transition: all 0.3s;
+    cursor: default;
+  }
+  .region-card:hover { transform: translateY(-2px); }
+  .region-card .region-name {
+    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  .region-card .psi-value {
+    font-size: 2.4rem; font-weight: 700; margin-bottom: 4px;
+  }
+  .region-card .psi-status {
+    font-size: 0.8rem; padding: 3px 10px;
+    border-radius: 20px; display: inline-block;
+  }
+  .region-card .pm25 {
+    margin-top: 10px; font-size: 0.8rem; color: var(--muted);
+  }
+  .region-card .pm25 span { color: var(--text); font-weight: 600; }
+
+  /* Map visualization */
+  .map-container {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px; margin-bottom: 24px;
+  }
+  .map-svg { width: 100%; height: auto; display: block; }
+
+  /* Pollutant breakdown */
+  .pollutants-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .pollutant-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px;
+    text-align: center;
+  }
+  .pollutant-card .p-name { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .pollutant-card .p-value { font-size: 1.6rem; font-weight: 700; margin: 6px 0 2px; }
+  .pollutant-card .p-unit { font-size: 0.7rem; color: var(--muted); }
+
+  /* Health advisory */
+  .advisory-card {
+    border-radius: 16px; padding: 20px 24px; margin-bottom: 24px;
+    border: 1px solid;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .advisory-card .icon { font-size: 2rem; flex-shrink: 0; }
+  .advisory-card .content h3 { font-size: 1rem; margin-bottom: 6px; }
+  .advisory-card .content p { font-size: 0.85rem; line-height: 1.5; opacity: 0.9; }
+
+  /* Trend chart */
+  .chart-container {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px; margin-bottom: 24px;
+  }
+  .chart-container canvas { width: 100% !important; height: 280px !important; }
+
+  /* Footer */
+  .footer {
+    text-align: center; padding: 20px 0 40px;
+    color: var(--muted); font-size: 0.75rem;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+
+  /* Auto-refresh indicator */
+  .refresh-indicator {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 30px; padding: 8px 16px;
+    font-size: 0.75rem; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+    z-index: 100;
+  }
+  .refresh-indicator .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--good); animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>🇸🇬 Singapore Haze Dashboard</h1>
+    <div class="subtitle">Real-time Air Quality & PSI Monitoring</div>
+    <div class="timestamp">Last updated: <span id="last-updated">—</span> · Auto-refreshes every 5 min</div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <div>Fetching live data from NEA…</div>
+  </div>
+
+  <!-- Error -->
+  <div id="error" class="error-banner" style="display:none;"></div>
+
+  <!-- Main content (hidden until data loads) -->
+  <div id="content" style="display:none;">
+
+    <!-- Island-wide gauge + map side by side -->
+    <div class="gauge-section">
+      <div class="gauge-card">
+        <div class="gauge-ring">
+          <svg width="140" height="140" viewBox="0 0 140 140">
+            <circle class="bg" cx="70" cy="70" r="58" fill="none" stroke-width="12"/>
+            <circle class="fg" id="gauge-arc" cx="70" cy="70" r="58" fill="none" stroke-width="12"
+              stroke-dasharray="364.4" stroke-dashoffset="364.4"/>
+          </svg>
+          <div class="value">
+            <div class="num" id="island-psi">—</div>
+            <div class="label">Island Avg PSI</div>
+          </div>
+        </div>
+        <div class="gauge-info">
+          <h3>Overall Air Quality</h3>
+          <div class="status" id="overall-status">—</div>
+          <div class="range" id="overall-range">—</div>
+          <div class="dominant" id="dominant-pollutant">—</div>
+        </div>
+      </div>
+
+      <div class="gauge-card" style="flex-direction:column; align-items:stretch; gap:16px;">
+        <h3 style="font-size:1rem; color:var(--muted);">📍 Region Map</h3>
+        <svg class="map-svg" viewBox="0 0 300 260" id="map-svg">
+          <!-- Singapore island outline (simplified) -->
+          <path d="M80,30 Q120,10 170,15 Q220,10 250,40 Q270,60 265,90 Q280,110 270,140 Q260,170 240,190 Q220,210 190,220 Q160,235 130,225 Q100,230 75,210 Q50,195 40,170 Q25,150 30,120 Q20,100 35,80 Q45,60 60,45 Z"
+            fill="#1a2332" stroke="#2a3548" stroke-width="1.5"/>
+          <!-- Region markers will be inserted here by JS -->
+          <g id="map-markers"></g>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Region cards -->
+    <div class="section-title">🗺️ All Regions</div>
+    <div class="region-grid" id="region-grid"></div>
+
+    <!-- Pollutant breakdown -->
+    <div class="section-title">🧪 Pollutant Breakdown (Island Average)</div>
+    <div class="pollutants-grid" id="pollutants-grid"></div>
+
+    <!-- 24h PSI Trend -->
+    <div class="section-title">📈 24h PSI Trend</div>
+    <div class="chart-container">
+      <canvas id="trend-chart"></canvas>
+    </div>
+
+    <!-- Health advisory -->
+    <div class="section-title">🏥 Health Advisory</div>
+    <div id="advisory-container"></div>
+
+  </div>
+
+  <div class="footer">
+    Data source: <a href="https://www.nea.gov.sg/" target="_blank">NEA Singapore</a> via
+    <a href="https://data.gov.sg/" target="_blank">data.gov.sg</a> API ·
+    PSI updated hourly
+  </div>
+</div>
+
+<div class="refresh-indicator">
+  <div class="dot"></div>
+  <span id="refresh-timer">Refreshing…</span>
+</div>
+
+<script>
+// ====== CONFIG ======
+const API_BASE = 'https://api-open.data.gov.sg/v2/real-time/api';
+const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const REGIONS = ['north', 'south', 'east', 'west', 'central'];
+const REGION_LABELS = { north: 'North', south: 'South', east: 'East', west: 'West', central: 'Central' };
+const REGION_COORDS = { north: [170, 45], south: [140, 195], east: [230, 90], west: [70, 100], central: [150, 100] };
+
+// ====== PSI color scale ======
+function psiColor(psi) {
+  if (psi <= 50) return '#22c55e';
+  if (psi <= 100) return '#eab308';
+  if (psi <= 200) return '#ef4444';
+  if (psi <= 300) return '#a855f7';
+  return '#dc2626';
+}
+function psiStatus(psi) {
+  if (psi <= 50) return 'Good';
+  if (psi <= 100) return 'Moderate';
+  if (psi <= 200) return 'Unhealthy';
+  if (psi <= 300) return 'Very Unhealthy';
+  return 'Hazardous';
+}
+function psiRange(psi) {
+  if (psi <= 50) return '0–50';
+  if (psi <= 100) return '51–100';
+  if (psi <= 200) return '101–200';
+  if (psi <= 300) return '201–300';
+  return '301+';
+}
+function psiBg(psi) {
+  if (psi <= 50) return 'rgba(34,197,94,0.12)';
+  if (psi <= 100) return 'rgba(234,179,8,0.12)';
+  if (psi <= 200) return 'rgba(239,68,68,0.12)';
+  if (psi <= 300) return 'rgba(168,85,247,0.12)';
+  return 'rgba(220,38,38,0.15)';
+}
+
+// ====== Health advisory text ======
+function healthAdvisory(psi) {
+  if (psi <= 50) return {
+    icon: '😊', title: 'Good',
+    msg: 'Air quality is satisfactory. No health precautions needed. Enjoy outdoor activities freely.',
+    bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.3)'
+  };
+  if (psi <= 100) return {
+    icon: '😐', title: 'Moderate',
+    msg: 'Air quality is acceptable. Unusually sensitive people should consider limiting prolonged outdoor exertion.',
+    bg: 'rgba(234,179,8,0.1)', border: 'rgba(234,179,8,0.3)'
+  };
+  if (psi <= 200) return {
+    icon: '😷', title: 'Unhealthy',
+    msg: 'Everyone may begin to experience health effects. Sensitive groups should reduce outdoor exertion. Wear a mask (N95/FFP2) if going out.',
+    bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)'
+  };
+  if (psi <= 300) return {
+    icon: '🤢', title: 'Very Unhealthy',
+    msg: 'Health alert: everyone may experience more serious health effects. Avoid outdoor activities. Use air purifiers indoors.',
+    bg: 'rgba(168,85,247,0.1)', border: 'rgba(168,85,247,0.3)'
+  };
+  return {
+    icon: '☠️', title: 'Hazardous',
+    msg: 'Health warnings of emergency conditions. Remain indoors with windows closed. Seek medical attention if experiencing breathing difficulty.',
+    bg: 'rgba(220,38,38,0.12)', border: 'rgba(220,38,38,0.3)'
+  };
+}
+
+// ====== Fetch PSI data ======
+async function fetchPSI() {
+  const res = await fetch(`${API_BASE}/psi`);
+  if (!res.ok) throw new Error(`API returned ${res.status}`);
+  return res.json();
+}
+
+// ====== Fetch PM2.5 data ======
+async function fetchPM25() {
+  const res = await fetch(`${API_BASE}/pm25`);
+  if (!res.ok) throw new Error(`PM2.5 API returned ${res.status}`);
+  return res.json();
+}
+
+// ====== Fetch historical PSI (for trend) ======
+async function fetchHistoricalPSI() {
+  // Get dates in Singapore timezone (UTC+8)
+  const sgNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+  const today = sgNow.toISOString().split('T')[0];
+  const yesterday = new Date(sgNow.getTime() - 86400000).toISOString().split('T')[0];
+
+  const results = [];
+  for (const date of [yesterday, today]) {
+    try {
+      const res = await fetch(`${API_BASE}/psi?date=${date}`);
+      if (res.ok) {
+        const data = await res.json();
+        results.push(...data.data.items);
+      }
+    } catch(e) { /* skip */ }
+  }
+  return results;
+}
+
+// ====== Render ======
+function renderMap(readings) {
+  const g = document.getElementById('map-markers');
+  g.innerHTML = '';
+  const psi = readings.psi_twenty_four_hourly || readings;
+  for (const region of REGIONS) {
+    const val = psi[region];
+    if (val == null) continue;
+    const [cx, cy] = REGION_COORDS[region];
+    const color = psiColor(val);
+
+    // Circle
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+    circle.setAttribute('r', '28');
+    circle.setAttribute('fill', color);
+    circle.setAttribute('opacity', '0.25');
+    circle.setAttribute('stroke', color);
+    circle.setAttribute('stroke-width', '2');
+    g.appendChild(circle);
+
+    // Inner circle
+    const inner = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    inner.setAttribute('cx', cx); inner.setAttribute('cy', cy);
+    inner.setAttribute('r', '8');
+    inner.setAttribute('fill', color);
+    g.appendChild(inner);
+
+    // Value text
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', cx); text.setAttribute('y', cy - 2);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('fill', '#fff');
+    text.setAttribute('font-size', '13');
+    text.setAttribute('font-weight', '700');
+    text.textContent = val;
+    g.appendChild(text);
+
+    // Region label
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', cx); label.setAttribute('y', cy + 44);
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('fill', '#9ca3af');
+    label.setAttribute('font-size', '9');
+    label.setAttribute('text-transform', 'uppercase');
+    label.textContent = REGION_LABELS[region];
+    g.appendChild(label);
+  }
+}
+
+function renderRegionCards(readings) {
+  const grid = document.getElementById('region-grid');
+  grid.innerHTML = '';
+  const psi = readings.psi_twenty_four_hourly || {};
+  const pm25 = readings.pm25_twenty_four_hourly || {};
+
+  for (const region of REGIONS) {
+    const val = psi[region] || 0;
+    const pm = pm25[region] || 0;
+    const color = psiColor(val);
+    const status = psiStatus(val);
+
+    const card = document.createElement('div');
+    card.className = 'region-card';
+    card.style.borderColor = color + '40';
+    card.innerHTML = `
+      <div class="region-name">${REGION_LABELS[region]}</div>
+      <div class="psi-value" style="color:${color}">${val}</div>
+      <div class="psi-status" style="background:${psiBg(val)};color:${color}">${status}</div>
+      <div class="pm25">PM2.5: <span>${pm} µg/m³</span></div>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+function renderPollutants(readings, pm25Data) {
+  const grid = document.getElementById('pollutants-grid');
+  grid.innerHTML = '';
+
+  // Compute island average from region readings
+  const avg = (obj) => {
+    const vals = REGIONS.map(r => obj[r]).filter(v => v != null);
+    return vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length) : '—';
+  };
+
+  const pollutants = [
+    { name: 'PM2.5', value: avg(readings.pm25_twenty_four_hourly), unit: 'µg/m³', key: 'pm25' },
+    { name: 'PM10', value: avg(readings.pm10_twenty_four_hourly), unit: 'µg/m³', key: 'pm10' },
+    { name: 'SO₂', value: avg(readings.so2_twenty_four_hourly), unit: 'µg/m³', key: 'so2' },
+    { name: 'NO₂', value: avg(readings.no2_one_hour_max), unit: 'µg/m³', key: 'no2' },
+    { name: 'O₃', value: avg(readings.o3_eight_hour_max), unit: 'µg/m³', key: 'o3' },
+    { name: 'CO', value: avg(readings.co_eight_hour_max), unit: 'mg/m³', key: 'co' },
+  ];
+
+  for (const p of pollutants) {
+    const card = document.createElement('div');
+    card.className = 'pollutant-card';
+    card.innerHTML = `
+      <div class="p-name">${p.name}</div>
+      <div class="p-value">${p.value}</div>
+      <div class="p-unit">${p.unit}</div>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+function renderGauge(islandAvg) {
+  const color = psiColor(islandAvg);
+  const arc = document.getElementById('gauge-arc');
+  const circumference = 2 * Math.PI * 58;
+  // PSI max scale ~400
+  const pct = Math.min(islandAvg / 400, 1);
+  arc.style.strokeDasharray = circumference;
+  arc.style.strokeDashoffset = circumference * (1 - pct);
+  arc.style.stroke = color;
+
+  document.getElementById('island-psi').textContent = islandAvg;
+  document.getElementById('island-psi').style.color = color;
+
+  const status = psiStatus(islandAvg);
+  document.getElementById('overall-status').textContent = status;
+  document.getElementById('overall-status').style.color = color;
+  document.getElementById('overall-range').textContent = `PSI Range: ${psiRange(islandAvg)}`;
+}
+
+function renderAdvisory(islandAvg) {
+  const adv = healthAdvisory(islandAvg);
+  const container = document.getElementById('advisory-container');
+  container.innerHTML = `
+    <div class="advisory-card" style="background:${adv.bg};border-color:${adv.border};">
+      <div class="icon">${adv.icon}</div>
+      <div class="content">
+        <h3>${adv.title} — PSI ${islandAvg}</h3>
+        <p>${adv.msg}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderTrend(historicalItems) {
+  const canvas = document.getElementById('trend-chart');
+  if (!canvas || !canvas.getContext) return;
+
+  // Prepare data: group by timestamp, compute island avg PSI
+  const points = {};
+  for (const item of historicalItems) {
+    const ts = item.timestamp;
+    const psi = item.readings?.psi_twenty_four_hourly;
+    if (!psi) continue;
+    const vals = REGIONS.map(r => psi[r]).filter(v => v != null);
+    if (!vals.length) continue;
+    const avg = Math.round(vals.reduce((a,b) => a+b, 0) / vals.length);
+    points[ts] = avg;
+  }
+
+  const sorted = Object.entries(points).sort((a,b) => new Date(a[0]) - new Date(b[0]));
+  const labels = sorted.map(([ts]) => {
+    const d = new Date(ts);
+    return `${d.getHours().toString().padStart(2,'0')}:00`;
+  });
+  const data = sorted.map(([,v]) => v);
+
+  if (!data.length) return;
+
+  // Draw chart
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = 280 * dpr;
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width, h = 280;
+  const pad = { top: 20, right: 20, bottom: 40, left: 40 };
+  const chartW = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+
+  const maxVal = Math.max(...data, 150);
+  const minVal = Math.min(...data, 0);
+  const yRange = maxVal - minVal || 1;
+
+  // Background
+  ctx.clearRect(0, 0, w, h);
+
+  // Grid lines
+  ctx.strokeStyle = '#1f2937';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (chartH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+
+    const val = Math.round(maxVal - (yRange / 4) * i);
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '11px system-ui';
+    ctx.textAlign = 'right';
+    ctx.fillText(val, pad.left - 8, y + 4);
+  }
+
+  // PSI threshold zones
+  const zones = [
+    { max: 50, color: 'rgba(34,197,94,0.06)' },
+    { max: 100, color: 'rgba(234,179,8,0.06)' },
+    { max: 200, color: 'rgba(239,68,68,0.08)' },
+    { max: 300, color: 'rgba(168,85,247,0.08)' },
+    { max: 400, color: 'rgba(220,38,38,0.1)' },
+  ];
+  let prevY = pad.top + chartH - ((0 - minVal) / yRange) * chartH;
+  for (const zone of zones) {
+    const zoneY = pad.top + chartH - ((zone.max - minVal) / yRange) * chartH;
+    ctx.fillStyle = zone.color;
+    ctx.fillRect(pad.left, zoneY, chartW, prevY - zoneY);
+    prevY = zoneY;
+  }
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = '#f59e0b';
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  const stepX = chartW / Math.max(data.length - 1, 1);
+  data.forEach((val, i) => {
+    const x = pad.left + i * stepX;
+    const y = pad.top + chartH - ((val - minVal) / yRange) * chartH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Area fill
+  ctx.lineTo(pad.left + (data.length - 1) * stepX, pad.top + chartH);
+  ctx.lineTo(pad.left, pad.top + chartH);
+  ctx.closePath();
+  const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + chartH);
+  gradient.addColorStop(0, 'rgba(245,158,11,0.25)');
+  gradient.addColorStop(1, 'rgba(245,158,11,0.02)');
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // Data points
+  data.forEach((val, i) => {
+    const x = pad.left + i * stepX;
+    const y = pad.top + chartH - ((val - minVal) / yRange) * chartH;
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = psiColor(val);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+  });
+
+  // X labels (show every few)
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'center';
+  const step = Math.ceil(labels.length / 8);
+  labels.forEach((label, i) => {
+    if (i % step === 0) {
+      ctx.fillText(label, pad.left + i * stepX, h - pad.bottom + 18);
+    }
+  });
+}
+
+function renderDominantPollutant(readings) {
+  const subIndices = {};
+  for (const [key, val] of Object.entries(readings)) {
+    if (key.endsWith('_sub_index')) {
+      subIndices[key] = val;
+    }
+  }
+  // Find the highest sub-index across regions
+  let maxKey = '', maxVal = 0;
+  for (const [key, obj] of Object.entries(subIndices)) {
+    for (const region of REGIONS) {
+      if (obj[region] > maxVal) {
+        maxVal = obj[region];
+        maxKey = key;
+      }
+    }
+  }
+  const nameMap = {
+    pm25_sub_index: 'PM2.5',
+    pm10_sub_index: 'PM10',
+    so2_sub_index: 'SO₂',
+    o3_sub_index: 'O₃',
+    co_sub_index: 'CO',
+    no2_sub_index: 'NO₂',
+  };
+  const el = document.getElementById('dominant-pollutant');
+  if (maxKey && maxVal > 0) {
+    el.textContent = `Dominant pollutant: ${nameMap[maxKey] || maxKey}`;
+  } else {
+    el.textContent = 'Dominant pollutant: —';
+  }
+}
+
+// ====== Main load ======
+async function loadData() {
+  try {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('content').style.display = 'none';
+    document.getElementById('error').style.display = 'none';
+
+    const psiData = await fetchPSI();
+    const item = psiData.data.items[0]; // latest reading
+    const readings = item.readings;
+
+    // Compute island average PSI
+    const psiVals = REGIONS.map(r => readings.psi_twenty_four_hourly?.[r]).filter(v => v != null);
+    const islandAvg = psiVals.length ? Math.round(psiVals.reduce((a,b) => a+b, 0) / psiVals.length) : 0;
+
+    // Render everything
+    document.getElementById('last-updated').textContent =
+      new Date(item.updatedTimestamp).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
+
+    renderGauge(islandAvg);
+    renderDominantPollutant(readings);
+    renderMap(readings.psi_twenty_four_hourly);
+    renderRegionCards(readings);
+    renderPollutants(readings);
+    renderAdvisory(islandAvg);
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+    // Fetch historical for trend (render AFTER content is visible so canvas has dimensions)
+    try {
+      const hist = await fetchHistoricalPSI();
+      renderTrend(hist);
+    } catch(e) {
+      // Trend is non-critical
+      console.warn('Could not load trend:', e);
+    }
+
+  } catch (err) {
+    console.error('Failed to load:', err);
+    document.getElementById('loading').style.display = 'none';
+    const errEl = document.getElementById('error');
+    errEl.textContent = `⚠️ Failed to load data: ${err.message}. The NEA API may be temporarily unavailable. Retrying in 30 seconds…`;
+    errEl.style.display = 'block';
+    setTimeout(loadData, 30000);
+  }
+}
+
+// ====== Auto-refresh countdown ======
+let refreshTimer = REFRESH_INTERVAL / 1000;
+function updateCountdown() {
+  refreshTimer--;
+  if (refreshTimer <= 0) {
+    refreshTimer = REFRESH_INTERVAL / 1000;
+    loadData();
+  }
+  const mins = Math.floor(refreshTimer / 60);
+  const secs = refreshTimer % 60;
+  document.getElementById('refresh-timer').textContent =
+    `Next refresh: ${mins}:${secs.toString().padStart(2,'0')}`;
+}
+
+// ====== Init ======
+loadData();
+setInterval(updateCountdown, 1000);
+updateCountdown();
+</script>
+</body>
+</html>
